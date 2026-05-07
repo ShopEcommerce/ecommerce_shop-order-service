@@ -1,0 +1,121 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// --- ENUMS ---
+enum OrderStatus {
+  PENDING
+  AWAITING_PAYMENT
+  PROCESSING
+  SHIPPED
+  COMPLETED
+  CANCELLED
+  RETURN_REQUESTED
+  RETURNED
+}
+
+enum ReturnStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  REFUNDED
+}
+
+enum EventStatus {
+  PENDING
+  PUBLISHED
+  FAILED
+}
+
+// --- MODELS ---
+
+model Order {
+  id              String      @id @default(uuid())
+  userId          String
+  status          OrderStatus @default(PENDING)
+  totalAmount     Decimal     @db.Decimal(10, 2)
+  shippingAddress Json        
+  
+  cancelReason    String?     @db.Text
+  canceledAt      DateTime?
+
+  version         Int         @default(1)
+
+  items           OrderItem[]
+  history         OrderHistory[]
+  returnRequests  ReturnRequest[]
+
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  @@map("orders")
+}
+
+model OrderItem {
+  id          String  @id @default(uuid())
+  orderId     String
+  productId   String
+  variantId   String
+  quantity    Int
+  unitPrice   Decimal @db.Decimal(10, 2) 
+
+  order       Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@map("order_items")
+}
+
+model OrderHistory {
+  id          String      @id @default(uuid())
+  orderId     String
+  status      OrderStatus
+  note        String?
+  createdBy   String
+  createdAt   DateTime    @default(now())
+
+  order       Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@map("order_history")
+}
+
+model ReturnRequest {
+  id            String       @id @default(uuid())
+  orderId       String
+  userId        String
+  status        ReturnStatus @default(PENDING)
+  reason        String       @db.Text
+  adminNote     String?      @db.Text
+  refundAmount  Decimal      @db.Decimal(10, 2)
+  
+  order         Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  @@map("return_requests")
+}
+
+// --- Outbox/Inbox pattern ---
+model OutboxEvent {
+  id          String      @id @default(uuid())
+  subject     String
+  payload     Json
+  status      EventStatus @default(PENDING)
+  errorReason String?
+  createdAt   DateTime    @default(now())
+  processedAt DateTime?
+
+  @@map("outbox_events")
+}
+
+model ProcessedEvent {
+  eventId     String   @id
+  subject     String
+  processedAt DateTime @default(now())
+
+  @@map("processed_events")
+}
