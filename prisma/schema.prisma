@@ -60,6 +60,7 @@ model OrderItem {
   id          String  @id @default(uuid())
   orderId     String
   productId   String
+  sellerId    String
   variantId   String
   quantity    Int
   unitPrice   Decimal @db.Decimal(10, 2) 
