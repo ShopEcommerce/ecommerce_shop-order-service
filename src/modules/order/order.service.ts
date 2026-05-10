@@ -5,7 +5,12 @@ import axios from 'axios';
 
 export class OrderService {
   
-  static async createOrder(userId: string, data: any, correlationId?: string) {
+  static async createOrder(
+    userId: string, 
+    data: any, 
+    token?: string,
+    correlationId?: string
+  ) {
     // Get variant IDs from order items
     const variantIds = data.items.map((i: any) => i.variantId);
 
@@ -26,9 +31,45 @@ export class OrderService {
       };
     });
 
+    const subTotal = validatedItems.reduce((acc: number, item: any) => acc + (item.unitPrice * item.quantity), 0);
+
+    const orderId = crypto.randomUUID();
+    let discountAmount = 0;
+    const couponCode = data.couponCode;
+
+    // Call Promotion Service to reserve coupon code
+    if (couponCode) {
+      try {
+        const response = await axios.post('http://localhost:3008/api/promotions/coupons/reserve', {
+          code: couponCode,
+          orderId: orderId,
+          orderAmount: subTotal
+        }, {
+          headers: { Authorization: token }
+        });
+
+        const coupon = response.data.data.coupon;
+        
+        if (coupon.discountType === 'PERCENTAGE') {
+          discountAmount = (subTotal * Number(coupon.discountValue)) / 100;
+        } else {
+          discountAmount = Number(coupon.discountValue);
+        }
+      } catch (error: any) {
+        const errorMessage = error.response?.data?.errors?.[0]?.message || error.response?.data?.message || 'Error applying coupon code';
+        throw new BadRequestError(errorMessage);
+      }
+    }
+
+    const finalTotalAmount = Math.max(0, subTotal - discountAmount);
+
     return OrderRepository.createOrder(userId, {
       ...data,
-      items: validatedItems
+      id: orderId,
+      items: validatedItems,
+      couponCode: couponCode || null,
+      discountAmount,
+      totalAmount: finalTotalAmount
     }, correlationId);
   }
 
