@@ -22,7 +22,10 @@ export const startOutboxWorker = () => {
 
       for (const event of events) {
         try {
-          const publisher = new DynamicPublisher(rabbitmqWrapper.channel, event.subject as Subjects);
+          const publisher = new DynamicPublisher(
+            rabbitmqWrapper.channel,
+            event.subject as Subjects,
+          );
           await publisher.publish(event.payload as any);
 
           await OutboxRepository.markAsPublished(event.id);
@@ -33,7 +36,7 @@ export const startOutboxWorker = () => {
         }
       }
     } catch (err) {
-      logger.error('[Order Outbox Worker] Error querying Database');
+      logger.error({ err }, '[Order Outbox Worker] Error querying Database');
     }
   }, 3000);
 };

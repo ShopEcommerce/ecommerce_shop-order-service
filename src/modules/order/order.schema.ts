@@ -8,11 +8,10 @@ const orderItemPayload = z.object({
   unitPrice: z.number().positive('Unit price must be a positive number'),
 });
 
-
 export const createOrderSchema = z.object({
   body: z.object({
-    shippingAddress: z.record(z.string(), z.unknown(), { 
-      error: 'Missing shipping information' 
+    shippingAddress: z.record(z.string(), z.unknown(), {
+      error: 'Missing shipping information',
     }),
     items: z.array(orderItemPayload).min(1, 'Order must have at least 1 product'),
     couponCode: z.string().optional(),

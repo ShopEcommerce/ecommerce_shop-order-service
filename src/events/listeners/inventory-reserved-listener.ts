@@ -8,21 +8,24 @@ import pino from 'pino';
 const logger = pino({ name: 'InventoryReservedListener' });
 
 export class InventoryReservedListener extends BaseListener<any> {
-  subject: any = 'InventoryReserved'; 
+  readonly subject = Subjects.InventoryReserved;
   queueGroupName = QueueGroupNames.OrderService;
 
-  async onMessage(data: any, msg: Message) {
+  async onMessage(data: any, _msg: Message) {
     const eventId = data.eventId;
     const correlationId = data.correlationId || 'N/A';
     const orderId = data.orderId;
 
-    logger.info({ correlationId, eventId, orderId }, 'Received signal: Inventory reserved successfully');
+    logger.info(
+      { correlationId, eventId, orderId },
+      'Received signal: Inventory reserved successfully',
+    );
 
     try {
       const isProcessed = await InboxRepository.isEventProcessed(eventId);
       if (isProcessed) {
         logger.info({ correlationId, eventId }, 'Event has already been processed. Skipping.');
-        return; 
+        return;
       }
 
       const order = await OrderRepository.findById(orderId);
@@ -40,19 +43,24 @@ export class InventoryReservedListener extends BaseListener<any> {
           OrderStatus.AWAITING_PAYMENT,
           'Inventory confirmed. Awaiting customer payment.',
           'SYSTEM',
-          correlationId
+          correlationId,
         );
         logger.info({ correlationId, orderId }, 'Order status updated to AWAITING_PAYMENT');
       } else {
-        logger.warn({ correlationId, orderId, status: order.status }, 'Order is not in PENDING state, skipping update');
+        logger.warn(
+          { correlationId, orderId, status: order.status },
+          'Order is not in PENDING state, skipping update',
+        );
       }
 
       // Mark as processed
       await InboxRepository.markAsProcessed(eventId, this.subject);
-
     } catch (error: any) {
-      logger.error({ correlationId, eventId, err: error.message }, 'Error occurred while processing InventoryReserved event');
-      throw error; 
+      logger.error(
+        { correlationId, eventId, err: error.message },
+        'Error occurred while processing InventoryReserved event',
+      );
+      throw error;
     }
   }
 }

@@ -10,22 +10,27 @@ const logger = pino({
 });
 
 export class OrderController {
-  
   static async createOrder(req: Request, res: Response) {
     const userId = req.currentUser!.id;
     const correlationId = req.correlationId || req.header('x-correlation-id') || 'N/A';
 
     const token = req.headers.authorization;
 
-    logger.info({ correlationId, userId, action: 'createOrder' }, 'Beginning to process order creation request');
+    logger.info(
+      { correlationId, userId, action: 'createOrder' },
+      'Beginning to process order creation request',
+    );
 
     const order = await OrderService.createOrder(userId, req.body, token, correlationId);
-    
-    logger.info({ correlationId, orderId: order.id }, 'Order created successfully, preparing to activate Saga');
+
+    logger.info(
+      { correlationId, orderId: order.id },
+      'Order created successfully, preparing to activate Saga',
+    );
     res.status(201).send({ message: 'Order created successfully', data: order });
   }
 
-  static async cancelOrder(req: Request<{ id: string }, {}, CancelOrderInput>, res: Response) {
+  static async cancelOrder(req: Request<{ id: string }, unknown, CancelOrderInput>, res: Response) {
     const userId = req.currentUser!.id;
     const role = req.currentUser!.role;
     const { id } = req.params;
@@ -35,12 +40,15 @@ export class OrderController {
     logger.info({ correlationId, orderId: id, userId }, 'Request to cancel order');
 
     const order = await OrderService.cancelOrder(id, userId, role, cancelReason, correlationId);
-    
+
     logger.info({ correlationId, orderId: id }, 'Order cancelled successfully');
     res.status(200).send({ message: 'Order cancelled successfully', data: order });
   }
 
-  static async requestReturn(req: Request<{ id: string }, {}, { reason: string }>, res: Response) {
+  static async requestReturn(
+    req: Request<{ id: string }, unknown, { reason: string }>,
+    res: Response,
+  ) {
     const userId = req.currentUser!.id;
     const { id } = req.params;
     const { reason } = req.body;
@@ -48,9 +56,12 @@ export class OrderController {
     logger.info({ orderId: id, userId }, 'Request to return/refund order');
 
     const returnReq = await OrderService.requestReturn(id, userId, reason);
-    
+
     logger.info({ orderId: id, returnId: returnReq.id }, 'Return request created successfully');
-    res.status(201).send({ message: 'Return request submitted successfully, please wait for approval', data: returnReq });
+    res.status(201).send({
+      message: 'Return request submitted successfully, please wait for approval',
+      data: returnReq,
+    });
   }
 
   static async getOrder(req: Request<{ id: string }>, res: Response) {

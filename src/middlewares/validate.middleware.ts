@@ -1,6 +1,6 @@
-import { Request, Response, NextFunction } from "express";
-import { ZodObject, ZodError } from "zod";
-import { RequestValidationError } from "@teleshop/common";
+import { Request, Response, NextFunction } from 'express';
+import { ZodObject, ZodError } from 'zod';
+import { RequestValidationError } from '@teleshop/common';
 
 export const validateZod = (schema: ZodObject<any>) => {
   return async (req: Request, res: Response, next: NextFunction) => {

@@ -7,41 +7,49 @@ import pino from 'pino';
 const logger = pino({ name: 'InventoryFailedListener' });
 
 export class InventoryFailedListener extends BaseListener<any> {
-  subject: any = 'InventoryFailed'; 
+  readonly subject = Subjects.InventoryFailed;
   queueGroupName = QueueGroupNames.OrderService;
 
-  async onMessage(data: any, msg: Message) {
+  async onMessage(data: any, _msg: Message) {
     const eventId = data.eventId;
     const correlationId = data.correlationId || 'N/A';
     const orderId = data.orderId;
     const reason = data.reason || 'English: Out of stock';
 
-    logger.warn({ correlationId, eventId, orderId }, `Received signal: Inventory deduction failed. Reason: ${reason}`);
+    logger.warn(
+      { correlationId, eventId, orderId },
+      `Received signal: Inventory deduction failed. Reason: ${reason}`,
+    );
 
     try {
       const isProcessed = await InboxRepository.isEventProcessed(eventId);
       if (isProcessed) {
-        return; 
+        return;
       }
 
       const order = await OrderRepository.findById(orderId);
       if (!order) {
-        throw new Error('Order not found'); 
+        throw new Error('Order not found');
       }
 
       await OrderRepository.cancelOrder(
-        order.id, 
-        order.version, 
-        `System automatically cancelled: ${reason}`, 
-        'SYSTEM'
+        order.id,
+        order.version,
+        `System automatically cancelled: ${reason}`,
+        'SYSTEM',
       );
 
-      logger.info({ correlationId, orderId }, 'Order automatically cancelled due to stock shortage');
+      logger.info(
+        { correlationId, orderId },
+        'Order automatically cancelled due to stock shortage',
+      );
 
       await InboxRepository.markAsProcessed(eventId, this.subject);
-
     } catch (error: any) {
-      logger.error({ correlationId, eventId, err: error.message }, 'Error occurred while processing InventoryFailed event');
+      logger.error(
+        { correlationId, eventId, err: error.message },
+        'Error occurred while processing InventoryFailed event',
+      );
       throw error;
     }
   }

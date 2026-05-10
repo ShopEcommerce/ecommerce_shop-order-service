@@ -2,14 +2,12 @@ import { prisma } from '../../db/prisma';
 import { Prisma, OrderStatus, ReturnStatus } from '@prisma/client';
 import crypto from 'crypto';
 import { Subjects, BadRequestError } from '@teleshop/common';
-import { CreateOrderInput } from './order.schema';
 
 export class OrderRepository {
-
   static async findById(id: string) {
     return prisma.order.findUnique({
       where: { id },
-      include: { items: true, history: true }
+      include: { items: true, history: true },
     });
   }
 
@@ -20,7 +18,7 @@ export class OrderRepository {
       include: { items: true },
       orderBy: { createdAt: 'desc' },
       skip,
-      take: limit
+      take: limit,
     });
   }
 
@@ -29,14 +27,14 @@ export class OrderRepository {
     return prisma.order.findMany({
       where: {
         items: { some: { sellerId } },
-        status: status
+        status: status,
       },
-      include: { 
-        items: { where: { sellerId } }
+      include: {
+        items: { where: { sellerId } },
       },
       skip,
       take: limit,
-      orderBy: { createdAt: 'desc' }
+      orderBy: { createdAt: 'desc' },
     });
   }
 
@@ -52,18 +50,18 @@ export class OrderRepository {
           discountAmount: data.discountAmount,
           shippingAddress: data.shippingAddress as Prisma.InputJsonValue,
           status: OrderStatus.PENDING,
-          
+
           items: {
             create: data.items.map((item: any) => ({
               productId: item.productId,
               sellerId: item.sellerId,
               variantId: item.variantId,
               quantity: item.quantity,
-              unitPrice: item.unitPrice
-            }))
-          }
+              unitPrice: item.unitPrice,
+            })),
+          },
         },
-        include: { items: true }
+        include: { items: true },
       });
 
       // Audit Trail
@@ -71,11 +69,11 @@ export class OrderRepository {
         data: {
           orderId: order.id,
           status: OrderStatus.PENDING,
-          note: data.couponCode 
-            ? `Order created with coupon [${data.couponCode}]. Awaiting inventory check.` 
+          note: data.couponCode
+            ? `Order created with coupon [${data.couponCode}]. Awaiting inventory check.`
             : 'Order created. Awaiting inventory check.',
           createdBy: userId,
-        }
+        },
       });
 
       // Send Event Outbox (active flow Saga)
@@ -87,19 +85,19 @@ export class OrderRepository {
         correlationId,
         orderId: order.id,
         userId: userId,
-        items: order.items.map(i => ({
+        items: order.items.map((i) => ({
           productId: i.productId,
           sellerId: i.sellerId,
           variantId: i.variantId,
-          quantity: i.quantity
-        }))
+          quantity: i.quantity,
+        })),
       };
 
       await tx.outboxEvent.create({
         data: {
           subject: Subjects.OrderCreated,
           payload: eventPayload as any,
-        }
+        },
       });
 
       return order;
@@ -108,26 +106,26 @@ export class OrderRepository {
 
   // UPDATE ORDER STATUS WITH OCC (CONFLICT AVOIDANCE)
   static async updateOrderStatus(
-    orderId: string, 
+    orderId: string,
     currentVersion: number, // Current version fetched from db before update
-    newStatus: OrderStatus, 
-    note: string, 
-    updatedBy: string, 
-    correlationId?: string
+    newStatus: OrderStatus,
+    note: string,
+    updatedBy: string,
+    correlationId?: string,
   ) {
     try {
       return await prisma.$transaction(async (tx) => {
         // Update status and increment version by 1
         // Prisma only updates if the `version` in the DB matches the `currentVersion` passed in
         const updatedOrder = await tx.order.update({
-          where: { 
+          where: {
             id: orderId,
-            version: currentVersion 
+            version: currentVersion,
           },
           data: {
             status: newStatus,
-            version: { increment: 1 } // Automatically increment by 1
-          }
+            version: { increment: 1 }, // Automatically increment by 1
+          },
         });
 
         // Audit trail
@@ -136,8 +134,8 @@ export class OrderRepository {
             orderId,
             status: newStatus,
             note,
-            createdBy: updatedBy
-          }
+            createdBy: updatedBy,
+          },
         });
 
         const eventPayload = {
@@ -147,24 +145,32 @@ export class OrderRepository {
           correlationId,
           orderId,
           status: newStatus,
-          version: updatedOrder.version
+          version: updatedOrder.version,
         };
 
         await tx.outboxEvent.create({
-          data: { subject: Subjects.OrderUpdated, payload: eventPayload as any }
+          data: { subject: Subjects.OrderUpdated, payload: eventPayload as any },
         });
 
         return updatedOrder;
       });
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
-        throw new BadRequestError('Update failed: Order has been modified by another process (Conflict).');
+        throw new BadRequestError(
+          'Update failed: Order has been modified by another process (Conflict).',
+        );
       }
       throw error;
     }
   }
 
-  static async cancelOrder(orderId: string, currentVersion: number, reason: string, updatedBy: string) {
+  static async cancelOrder(
+    orderId: string,
+    currentVersion: number,
+    reason: string,
+    updatedBy: string,
+    correlationId?: string,
+  ) {
     try {
       return await prisma.$transaction(async (tx) => {
         const canceledOrder = await tx.order.update({
@@ -173,8 +179,8 @@ export class OrderRepository {
             status: OrderStatus.CANCELLED,
             cancelReason: reason,
             canceledAt: new Date(),
-            version: { increment: 1 }
-          }
+            version: { increment: 1 },
+          },
         });
 
         await tx.orderHistory.create({
@@ -182,8 +188,8 @@ export class OrderRepository {
             orderId,
             status: OrderStatus.CANCELLED,
             note: `Cancel order. Reason: ${reason}`,
-            createdBy: updatedBy
-          }
+            createdBy: updatedBy,
+          },
         });
 
         // Send Event to notify Catalog (release inventory) and Payment (refund if applicable)
@@ -192,24 +198,30 @@ export class OrderRepository {
           type: Subjects.OrderCancelled,
           occurredAt: new Date().toISOString(),
           orderId,
-          reason
+          reason,
+          correlationId,
         };
 
         await tx.outboxEvent.create({
-          data: { subject: Subjects.OrderCancelled, payload: eventPayload as any }
+          data: { subject: Subjects.OrderCancelled, payload: eventPayload as any },
         });
 
         return canceledOrder;
       });
     } catch (error) {
-       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
         throw new BadRequestError('Order has been modified by another process (Conflict).');
       }
       throw error;
     }
   }
 
-  static async createReturnRequest(data: { orderId: string; userId: string; reason: string; amount: number }) {
+  static async createReturnRequest(data: {
+    orderId: string;
+    userId: string;
+    reason: string;
+    amount: number;
+  }) {
     return prisma.$transaction(async (tx) => {
       const request = await tx.returnRequest.create({
         data: {
@@ -217,13 +229,13 @@ export class OrderRepository {
           userId: data.userId,
           reason: data.reason,
           refundAmount: data.amount,
-          status: ReturnStatus.PENDING
-        }
+          status: ReturnStatus.PENDING,
+        },
       });
 
       await tx.order.update({
         where: { id: data.orderId },
-        data: { status: OrderStatus.RETURN_REQUESTED }
+        data: { status: OrderStatus.RETURN_REQUESTED },
       });
 
       await tx.orderHistory.create({
@@ -231,8 +243,8 @@ export class OrderRepository {
           orderId: data.orderId,
           status: OrderStatus.RETURN_REQUESTED,
           note: `Khách hàng yêu cầu trả hàng. Lý do: ${data.reason}`,
-          createdBy: data.userId
-        }
+          createdBy: data.userId,
+        },
       });
 
       return request;
