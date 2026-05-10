@@ -1,0 +1,58 @@
+name: Order Service CI
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout order-service
+        uses: actions/checkout@v3
+        with:
+          path: order-service
+
+      - name: Checkout shared repo
+        uses: actions/checkout@v3
+        with:
+          repository: ShopEcommerce/ecommerce_shop-shared
+          path: shared
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '22.x'
+          cache: 'npm'
+          cache-dependency-path: 'order-service/package-lock.json'
+
+      - name: Build Shared Library
+        run: |
+          cd shared
+          npm install
+          npm run build
+          npm pack
+
+      - name: Install Dependencies
+        run: |
+          cd order-service
+          npm install ../shared/teleshop-common-1.0.0.tgz
+          npm install
+
+      - name: Generate Prisma Client
+        run: |
+          cd order-service
+          npx prisma generate
+
+      - name: Run Linter
+        run: |
+          cd order-service
+          npm run lint
+
+      - name: Run Unit Tests
+        run: |
+          cd order-service
+          npm run test:ci
