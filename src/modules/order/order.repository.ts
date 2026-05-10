@@ -41,20 +41,20 @@ export class OrderRepository {
   }
 
   // CREATE ORDER (SAGA INITIATOR)
-  static async createOrder(userId: string, data: CreateOrderInput, correlationId?: string) {
+  static async createOrder(userId: string, data: any, correlationId?: string) {
     return prisma.$transaction(async (tx) => {
-      // Calculate total amount (Frontend sends unit price, Backend multiplies automatically to prevent fraud)
-      const totalAmount = data.items.reduce((sum, item) => sum + (item.quantity * item.unitPrice), 0);
-
       const order = await tx.order.create({
         data: {
+          id: data.id,
           userId,
-          totalAmount,
+          totalAmount: data.totalAmount,
+          couponCode: data.couponCode,
+          discountAmount: data.discountAmount,
           shippingAddress: data.shippingAddress as Prisma.InputJsonValue,
           status: OrderStatus.PENDING,
           
           items: {
-            create: data.items.map(item => ({
+            create: data.items.map((item: any) => ({
               productId: item.productId,
               sellerId: item.sellerId,
               variantId: item.variantId,
@@ -71,7 +71,9 @@ export class OrderRepository {
         data: {
           orderId: order.id,
           status: OrderStatus.PENDING,
-          note: 'Order created. Awaiting inventory check.',
+          note: data.couponCode 
+            ? `Order created with coupon [${data.couponCode}]. Awaiting inventory check.` 
+            : 'Order created. Awaiting inventory check.',
           createdBy: userId,
         }
       });

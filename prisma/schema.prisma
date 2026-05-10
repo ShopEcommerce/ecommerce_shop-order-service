@@ -39,7 +39,10 @@ model Order {
   userId          String
   status          OrderStatus @default(PENDING)
   totalAmount     Decimal     @db.Decimal(10, 2)
-  shippingAddress Json        
+  shippingAddress Json
+
+  couponCode      String?
+  discountAmount  Decimal     @default(0) @db.Decimal(10, 2)
   
   cancelReason    String?     @db.Text
   canceledAt      DateTime?

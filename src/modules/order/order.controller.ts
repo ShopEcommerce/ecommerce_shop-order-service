@@ -15,9 +15,11 @@ export class OrderController {
     const userId = req.currentUser!.id;
     const correlationId = req.correlationId || req.header('x-correlation-id') || 'N/A';
 
+    const token = req.headers.authorization;
+
     logger.info({ correlationId, userId, action: 'createOrder' }, 'Beginning to process order creation request');
 
-    const order = await OrderService.createOrder(userId, req.body, correlationId);
+    const order = await OrderService.createOrder(userId, req.body, token, correlationId);
     
     logger.info({ correlationId, orderId: order.id }, 'Order created successfully, preparing to activate Saga');
     res.status(201).send({ message: 'Order created successfully', data: order });

@@ -15,6 +15,7 @@ export const createOrderSchema = z.object({
       error: 'Missing shipping information' 
     }),
     items: z.array(orderItemPayload).min(1, 'Order must have at least 1 product'),
+    couponCode: z.string().optional(),
   }),
 });
 
