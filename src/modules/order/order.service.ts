@@ -1,20 +1,22 @@
 import { OrderRepository } from './order.repository';
 import { BadRequestError, NotFoundError, ForbiddenError } from '@teleshop/common';
-import { OrderStatus } from '@prisma/client';
+import { OrderStatus, ReturnStatus } from '@prisma/client';
 import axios from 'axios';
 
 export class OrderService {
   static async createOrder(userId: string, data: any, token?: string, correlationId?: string) {
     // Get variant IDs from order items
     const variantIds = data.items.map((i: any) => i.variantId);
+    const authHeader = token
+      ? token.startsWith('Bearer ')
+        ? token
+        : `Bearer ${token}`
+      : undefined;
 
     // Call Catalog Service to validate prices (This prevents price manipulation from frontend)
-    const catalogResponse = await axios.post(
-      'http://catalog-service:3003/api/catalog/products/validate-prices',
-      {
-        variantIds,
-      },
-    );
+    const catalogResponse = await axios.post('http://localhost:3003/api/product/validate-prices', {
+      variantIds,
+    });
 
     const verifiedPrices = catalogResponse.data;
 
@@ -49,7 +51,7 @@ export class OrderService {
             orderAmount: subTotal,
           },
           {
-            headers: { Authorization: token },
+            ...(authHeader ? { headers: { Authorization: authHeader } } : {}),
           },
         );
 
@@ -142,7 +144,19 @@ export class OrderService {
     const order = await OrderRepository.findById(orderId);
     if (!order) throw new NotFoundError('Order not found');
 
-    if (order.userId !== userId && role !== 'ADMIN' && role !== 'SELLER') {
+    if (role === 'ADMIN') {
+      return order;
+    }
+
+    if (role === 'SELLER') {
+      const ownsOrder = order.items.some((item) => item.sellerId === userId);
+      if (!ownsOrder) {
+        throw new ForbiddenError('You do not have permission to access this order');
+      }
+      return order;
+    }
+
+    if (order.userId !== userId) {
       throw new ForbiddenError('You do not have permission to access this order');
     }
 
@@ -151,5 +165,113 @@ export class OrderService {
 
   static async getCustomerOrders(userId: string, page: number, limit: number) {
     return OrderRepository.findByUserId(userId, page, limit);
+  }
+
+  static async getSellerOrders(
+    sellerId: string,
+    page: number,
+    limit: number,
+    status?: OrderStatus,
+    search?: string,
+  ) {
+    return OrderRepository.findSellerOrders(sellerId, { page, limit, status, search });
+  }
+
+  static async getSellerCancellations(
+    sellerId: string,
+    page: number,
+    limit: number,
+    search?: string,
+  ) {
+    return OrderRepository.findSellerCancellations(sellerId, { page, limit, search });
+  }
+
+  static async updateOrderStatusBySeller(
+    orderId: string,
+    sellerId: string,
+    role: string,
+    nextStatus: OrderStatus,
+    note?: string,
+    correlationId?: string,
+  ) {
+    const order = await OrderRepository.findById(orderId);
+    if (!order) throw new NotFoundError('Order not found');
+
+    const ownsOrder = order.items.some((item) => item.sellerId === sellerId);
+    if (!ownsOrder && role !== 'ADMIN') {
+      throw new ForbiddenError('You do not have permission to update this order');
+    }
+
+    if (
+      order.status === OrderStatus.CANCELLED ||
+      order.status === OrderStatus.RETURNED ||
+      order.status === OrderStatus.COMPLETED
+    ) {
+      throw new BadRequestError(`Cannot update order in state: ${order.status}`);
+    }
+
+    if (nextStatus === OrderStatus.CANCELLED) {
+      return this.cancelOrder(
+        orderId,
+        sellerId,
+        role,
+        note || 'Seller cancelled order from dashboard',
+        correlationId,
+      );
+    }
+
+    if (nextStatus === OrderStatus.RETURNED) {
+      throw new BadRequestError('Use return request workflow to mark order as returned');
+    }
+
+    return OrderRepository.updateOrderStatus(
+      orderId,
+      order.version,
+      nextStatus,
+      note || `Order status updated to ${nextStatus}`,
+      sellerId,
+      correlationId,
+    );
+  }
+
+  static async getSellerReturns(
+    sellerId: string,
+    page: number,
+    limit: number,
+    status?: ReturnStatus,
+    search?: string,
+  ) {
+    return OrderRepository.findReturnRequestsBySeller(sellerId, {
+      page,
+      limit,
+      status,
+      search,
+    });
+  }
+
+  static async getSellerReturnById(returnRequestId: string, sellerId: string) {
+    const request = await OrderRepository.findSellerReturnById(returnRequestId, sellerId);
+    if (!request) throw new NotFoundError('Return request not found');
+    return request;
+  }
+
+  static async updateSellerReturnStatus(
+    returnRequestId: string,
+    sellerId: string,
+    status: ReturnStatus,
+    adminNote?: string,
+  ) {
+    const request = await OrderRepository.findSellerReturnById(returnRequestId, sellerId);
+    if (!request) throw new NotFoundError('Return request not found');
+
+    if (request.status === ReturnStatus.REJECTED || request.status === ReturnStatus.REFUNDED) {
+      throw new BadRequestError(`Cannot update return request in state: ${request.status}`);
+    }
+
+    if (status === ReturnStatus.REFUNDED && request.status !== ReturnStatus.APPROVED) {
+      throw new BadRequestError('Return must be approved before refunding');
+    }
+
+    return OrderRepository.updateReturnStatus(returnRequestId, status, adminNote, sellerId);
   }
 }
