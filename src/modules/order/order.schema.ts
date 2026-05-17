@@ -28,11 +28,67 @@ export const cancelOrderSchema = z.object({
 });
 
 export const returnRequestSchema = z.object({
+  params: z.object({
+    id: z.string().uuid('Invalid order ID'),
+  }),
   body: z.object({
     reason: z.string().min(10, 'Vui lòng mô tả chi tiết lý do trả hàng (ít nhất 10 ký tự)'),
+  }),
+});
+
+const orderStatusEnum = z.enum([
+  'PENDING',
+  'AWAITING_PAYMENT',
+  'PROCESSING',
+  'SHIPPED',
+  'COMPLETED',
+  'CANCELLED',
+  'RETURN_REQUESTED',
+  'RETURNED',
+]);
+
+const returnStatusEnum = z.enum(['PENDING', 'APPROVED', 'REJECTED', 'REFUNDED']);
+
+export const sellerOrderQuerySchema = z.object({
+  query: z.object({
+    page: z.coerce.number().int().positive().optional(),
+    limit: z.coerce.number().int().positive().max(100).optional(),
+    status: orderStatusEnum.optional(),
+    search: z.string().trim().optional(),
+  }),
+});
+
+export const sellerReturnQuerySchema = z.object({
+  query: z.object({
+    page: z.coerce.number().int().positive().optional(),
+    limit: z.coerce.number().int().positive().max(100).optional(),
+    status: returnStatusEnum.optional(),
+    search: z.string().trim().optional(),
+  }),
+});
+
+export const sellerReturnStatusSchema = z.object({
+  params: z.object({
+    id: z.string().uuid('Invalid return request ID'),
+  }),
+  body: z.object({
+    status: z.enum(['APPROVED', 'REJECTED', 'REFUNDED']),
+    adminNote: z.string().trim().max(500).optional(),
+  }),
+});
+
+export const sellerOrderStatusSchema = z.object({
+  params: z.object({
+    id: z.string().uuid('Invalid order ID'),
+  }),
+  body: z.object({
+    status: z.enum(['PROCESSING', 'SHIPPED', 'COMPLETED', 'CANCELLED']),
+    note: z.string().trim().max(500).optional(),
   }),
 });
 
 export type CreateOrderInput = z.infer<typeof createOrderSchema>['body'];
 export type CancelOrderInput = z.infer<typeof cancelOrderSchema>['body'];
 export type ReturnRequestInput = z.infer<typeof returnRequestSchema>['body'];
+export type SellerOrderStatusInput = z.infer<typeof sellerOrderStatusSchema>['body'];
+export type SellerReturnStatusInput = z.infer<typeof sellerReturnStatusSchema>['body'];

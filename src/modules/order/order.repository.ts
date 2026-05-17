@@ -12,7 +12,7 @@ export class OrderRepository {
   }
 
   static async findByUserId(userId: string, page = 1, limit = 10) {
-    const skip = (page - 1) * limit;
+    const skip = (Number(page) - 1) * limit;
     return prisma.order.findMany({
       where: { userId },
       include: { items: true },
@@ -35,6 +35,188 @@ export class OrderRepository {
       skip,
       take: limit,
       orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  static async findSellerOrders(
+    sellerId: string,
+    opts: {
+      page?: number;
+      limit?: number;
+      status?: OrderStatus;
+      search?: string;
+    } = {},
+  ) {
+    const page = opts.page || 1;
+    const limit = opts.limit || 10;
+    const skip = (page - 1) * limit;
+
+    const where: Prisma.OrderWhereInput = {
+      items: { some: { sellerId } },
+      ...(opts.status ? { status: opts.status } : {}),
+      ...(opts.search
+        ? {
+            OR: [{ id: { contains: opts.search } }, { userId: { contains: opts.search } }],
+          }
+        : {}),
+    };
+
+    const [orders, total] = await prisma.$transaction([
+      prisma.order.findMany({
+        where,
+        include: {
+          items: { where: { sellerId } },
+          history: true,
+        },
+        skip,
+        take: limit,
+        orderBy: { createdAt: 'desc' },
+      }),
+      prisma.order.count({ where }),
+    ]);
+
+    return { data: orders, total };
+  }
+
+  static async findSellerCancellations(
+    sellerId: string,
+    opts: {
+      page?: number;
+      limit?: number;
+      search?: string;
+    } = {},
+  ) {
+    return this.findSellerOrders(sellerId, {
+      page: opts.page,
+      limit: opts.limit,
+      search: opts.search,
+      status: OrderStatus.CANCELLED,
+    });
+  }
+
+  static async findReturnRequestsBySeller(
+    sellerId: string,
+    opts: {
+      page?: number;
+      limit?: number;
+      status?: ReturnStatus;
+      search?: string;
+    } = {},
+  ) {
+    const page = opts.page || 1;
+    const limit = opts.limit || 10;
+    const skip = (page - 1) * limit;
+
+    const where: Prisma.ReturnRequestWhereInput = {
+      order: { items: { some: { sellerId } } },
+      ...(opts.status ? { status: opts.status } : {}),
+      ...(opts.search
+        ? {
+            OR: [
+              { id: { contains: opts.search } },
+              { orderId: { contains: opts.search } },
+              { userId: { contains: opts.search } },
+            ],
+          }
+        : {}),
+    };
+
+    const [returns, total] = await prisma.$transaction([
+      prisma.returnRequest.findMany({
+        where,
+        include: {
+          order: {
+            include: {
+              items: { where: { sellerId } },
+            },
+          },
+        },
+        skip,
+        take: limit,
+        orderBy: { createdAt: 'desc' },
+      }),
+      prisma.returnRequest.count({ where }),
+    ]);
+
+    return { data: returns, total };
+  }
+
+  static async findSellerReturnById(id: string, sellerId: string) {
+    return prisma.returnRequest.findFirst({
+      where: {
+        id,
+        order: {
+          items: { some: { sellerId } },
+        },
+      },
+      include: {
+        order: {
+          include: {
+            items: { where: { sellerId } },
+            history: true,
+          },
+        },
+      },
+    });
+  }
+
+  static async updateReturnStatus(
+    returnRequestId: string,
+    status: ReturnStatus,
+    adminNote: string | undefined,
+    updatedBy: string,
+  ) {
+    return prisma.$transaction(async (tx) => {
+      const updated = await tx.returnRequest.update({
+        where: { id: returnRequestId },
+        data: { status, adminNote },
+        include: { order: true },
+      });
+
+      if (status === ReturnStatus.REJECTED) {
+        await tx.order.update({
+          where: { id: updated.orderId },
+          data: { status: OrderStatus.COMPLETED },
+        });
+
+        await tx.orderHistory.create({
+          data: {
+            orderId: updated.orderId,
+            status: OrderStatus.COMPLETED,
+            note: `Return request rejected${adminNote ? `. Note: ${adminNote}` : ''}`,
+            createdBy: updatedBy,
+          },
+        });
+      }
+
+      if (status === ReturnStatus.REFUNDED) {
+        await tx.order.update({
+          where: { id: updated.orderId },
+          data: { status: OrderStatus.RETURNED },
+        });
+
+        await tx.orderHistory.create({
+          data: {
+            orderId: updated.orderId,
+            status: OrderStatus.RETURNED,
+            note: `Return request refunded${adminNote ? `. Note: ${adminNote}` : ''}`,
+            createdBy: updatedBy,
+          },
+        });
+      }
+
+      if (status === ReturnStatus.APPROVED) {
+        await tx.orderHistory.create({
+          data: {
+            orderId: updated.orderId,
+            status: OrderStatus.RETURN_REQUESTED,
+            note: `Return request approved${adminNote ? `. Note: ${adminNote}` : ''}`,
+            createdBy: updatedBy,
+          },
+        });
+      }
+
+      return updated;
     });
   }
 
@@ -152,6 +334,19 @@ export class OrderRepository {
           data: { subject: Subjects.OrderUpdated, payload: eventPayload as any },
         });
 
+        if (newStatus === OrderStatus.COMPLETED) {
+          const paymentCompletedPayload = {
+            eventId: crypto.randomUUID(),
+            type: Subjects.PaymentCompleted,
+            occurredAt: new Date().toISOString(),
+            correlationId,
+            orderId,
+          };
+          await tx.outboxEvent.create({
+            data: { subject: Subjects.PaymentCompleted, payload: paymentCompletedPayload as any },
+          });
+        }
+
         return updatedOrder;
       });
     } catch (error) {
@@ -181,6 +376,7 @@ export class OrderRepository {
             canceledAt: new Date(),
             version: { increment: 1 },
           },
+          include: { items: true },
         });
 
         await tx.orderHistory.create({
@@ -200,6 +396,12 @@ export class OrderRepository {
           orderId,
           reason,
           correlationId,
+          userId: canceledOrder.userId,
+          items: canceledOrder.items.map((i) => ({
+            productId: i.productId,
+            variantId: i.variantId,
+            quantity: i.quantity,
+          })),
         };
 
         await tx.outboxEvent.create({
