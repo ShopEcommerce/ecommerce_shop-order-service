@@ -1,7 +1,16 @@
-import { prisma } from '../../db/prisma';
-import { Prisma, OrderStatus, ReturnStatus } from '@prisma/client';
 import crypto from 'crypto';
-import { Subjects, BadRequestError } from '@teleshop/common';
+import { Prisma, OrderStatus, ReturnStatus } from '@prisma/client';
+import { BadRequestError, DomainEvent, Subjects } from '@teleshop/common';
+import { prisma } from '../../db/prisma';
+
+type OrderCreatedEventData = Extract<DomainEvent, { subject: Subjects.OrderCreated }>['data'];
+type OrderUpdatedEventData = Extract<DomainEvent, { subject: Subjects.OrderUpdated }>['data'];
+type OrderCancelledEventData = Extract<DomainEvent, { subject: Subjects.OrderCancelled }>['data'];
+type OrderCompletedEventData = Extract<DomainEvent, { subject: Subjects.OrderCompleted }>['data'];
+type PaymentCompletedEventData = Extract<
+  DomainEvent,
+  { subject: Subjects.PaymentCompleted }
+>['data'];
 
 export class OrderRepository {
   static async findById(id: string) {
@@ -12,30 +21,32 @@ export class OrderRepository {
   }
 
   static async findByUserId(userId: string, page = 1, limit = 10) {
-    const skip = (Number(page) - 1) * limit;
-    return prisma.order.findMany({
-      where: { userId },
-      include: { items: true },
-      orderBy: { createdAt: 'desc' },
-      skip,
-      take: limit,
-    });
-  }
+    const currentPage = Number(page) || 1;
+    const currentLimit = Number(limit) || 10;
+    const skip = (currentPage - 1) * currentLimit;
 
-  static async findOrdersBySeller(sellerId: string, status?: OrderStatus, page = 1, limit = 10) {
-    const skip = (page - 1) * limit;
-    return prisma.order.findMany({
-      where: {
-        items: { some: { sellerId } },
-        status: status,
+    const [data, total] = await prisma.$transaction([
+      prisma.order.findMany({
+        where: { userId },
+        include: { items: true },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: currentLimit,
+      }),
+      prisma.order.count({
+        where: { userId },
+      }),
+    ]);
+
+    return {
+      data,
+      meta: {
+        total,
+        page: currentPage,
+        limit: currentLimit,
+        totalPages: Math.ceil(total / currentLimit),
       },
-      include: {
-        items: { where: { sellerId } },
-      },
-      skip,
-      take: limit,
-      orderBy: { createdAt: 'desc' },
-    });
+    };
   }
 
   static async findSellerOrders(
@@ -220,7 +231,6 @@ export class OrderRepository {
     });
   }
 
-  // CREATE ORDER (SAGA INITIATOR)
   static async createOrder(userId: string, data: any, correlationId?: string) {
     return prisma.$transaction(async (tx) => {
       const order = await tx.order.create({
@@ -232,7 +242,6 @@ export class OrderRepository {
           discountAmount: data.discountAmount,
           shippingAddress: data.shippingAddress as Prisma.InputJsonValue,
           status: OrderStatus.PENDING,
-
           items: {
             create: data.items.map((item: any) => ({
               productId: item.productId,
@@ -246,7 +255,6 @@ export class OrderRepository {
         include: { items: true },
       });
 
-      // Audit Trail
       await tx.orderHistory.create({
         data: {
           orderId: order.id,
@@ -258,20 +266,19 @@ export class OrderRepository {
         },
       });
 
-      // Send Event Outbox (active flow Saga)
-      // Catalog Service will listen to this event and start reducing inventory
-      const eventPayload = {
-        eventId: crypto.randomUUID(),
+      const eventPayload: OrderCreatedEventData = {
+        id: crypto.randomUUID(),
         type: Subjects.OrderCreated,
         occurredAt: new Date().toISOString(),
+        version: 1,
         correlationId,
         orderId: order.id,
-        userId: userId,
-        items: order.items.map((i) => ({
-          productId: i.productId,
-          sellerId: i.sellerId,
-          variantId: i.variantId,
-          quantity: i.quantity,
+        userId,
+        items: order.items.map((item) => ({
+          productId: item.productId,
+          sellerId: item.sellerId,
+          variantId: item.variantId,
+          quantity: item.quantity,
         })),
       };
 
@@ -286,10 +293,9 @@ export class OrderRepository {
     });
   }
 
-  // UPDATE ORDER STATUS WITH OCC (CONFLICT AVOIDANCE)
   static async updateOrderStatus(
     orderId: string,
-    currentVersion: number, // Current version fetched from db before update
+    currentVersion: number,
     newStatus: OrderStatus,
     note: string,
     updatedBy: string,
@@ -297,8 +303,6 @@ export class OrderRepository {
   ) {
     try {
       return await prisma.$transaction(async (tx) => {
-        // Update status and increment version by 1
-        // Prisma only updates if the `version` in the DB matches the `currentVersion` passed in
         const updatedOrder = await tx.order.update({
           where: {
             id: orderId,
@@ -306,11 +310,13 @@ export class OrderRepository {
           },
           data: {
             status: newStatus,
-            version: { increment: 1 }, // Automatically increment by 1
+            version: { increment: 1 },
+          },
+          include: {
+            items: true,
           },
         });
 
-        // Audit trail
         await tx.orderHistory.create({
           data: {
             orderId,
@@ -320,14 +326,14 @@ export class OrderRepository {
           },
         });
 
-        const eventPayload = {
-          eventId: crypto.randomUUID(),
+        const eventPayload: OrderUpdatedEventData = {
+          id: crypto.randomUUID(),
           type: Subjects.OrderUpdated,
           occurredAt: new Date().toISOString(),
+          version: updatedOrder.version,
           correlationId,
           orderId,
           status: newStatus,
-          version: updatedOrder.version,
         };
 
         await tx.outboxEvent.create({
@@ -335,13 +341,33 @@ export class OrderRepository {
         });
 
         if (newStatus === OrderStatus.COMPLETED) {
-          const paymentCompletedPayload = {
-            eventId: crypto.randomUUID(),
+          const orderCompletedPayload: OrderCompletedEventData = {
+            id: crypto.randomUUID(),
+            type: Subjects.OrderCompleted,
+            occurredAt: new Date().toISOString(),
+            version: 1,
+            correlationId,
+            orderId,
+            userId: updatedOrder.userId,
+            items: updatedOrder.items.map((item) => ({
+              productId: item.productId,
+              quantity: item.quantity,
+            })),
+          };
+
+          await tx.outboxEvent.create({
+            data: { subject: Subjects.OrderCompleted, payload: orderCompletedPayload as any },
+          });
+
+          const paymentCompletedPayload: PaymentCompletedEventData = {
+            id: crypto.randomUUID(),
             type: Subjects.PaymentCompleted,
             occurredAt: new Date().toISOString(),
+            version: 1,
             correlationId,
             orderId,
           };
+
           await tx.outboxEvent.create({
             data: { subject: Subjects.PaymentCompleted, payload: paymentCompletedPayload as any },
           });
@@ -388,19 +414,19 @@ export class OrderRepository {
           },
         });
 
-        // Send Event to notify Catalog (release inventory) and Payment (refund if applicable)
-        const eventPayload = {
-          eventId: crypto.randomUUID(),
+        const eventPayload: OrderCancelledEventData = {
+          id: crypto.randomUUID(),
           type: Subjects.OrderCancelled,
           occurredAt: new Date().toISOString(),
+          version: 1,
           orderId,
           reason,
           correlationId,
           userId: canceledOrder.userId,
-          items: canceledOrder.items.map((i) => ({
-            productId: i.productId,
-            variantId: i.variantId,
-            quantity: i.quantity,
+          items: canceledOrder.items.map((item) => ({
+            productId: item.productId,
+            variantId: item.variantId,
+            quantity: item.quantity,
           })),
         };
 
@@ -444,7 +470,7 @@ export class OrderRepository {
         data: {
           orderId: data.orderId,
           status: OrderStatus.RETURN_REQUESTED,
-          note: `Khách hàng yêu cầu trả hàng. Lý do: ${data.reason}`,
+          note: `Customer requested a return. Reason: ${data.reason}`,
           createdBy: data.userId,
         },
       });

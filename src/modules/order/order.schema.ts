@@ -5,7 +5,6 @@ const orderItemPayload = z.object({
   sellerId: z.string().uuid('Invalid seller ID'),
   variantId: z.string().uuid('Invalid variant ID'),
   quantity: z.number().int().positive('Quantity must be a positive integer'),
-  unitPrice: z.number().positive('Unit price must be a positive number'),
 });
 
 export const createOrderSchema = z.object({
@@ -55,6 +54,13 @@ export const sellerOrderQuerySchema = z.object({
     limit: z.coerce.number().int().positive().max(100).optional(),
     status: orderStatusEnum.optional(),
     search: z.string().trim().optional(),
+  }),
+});
+
+export const customerOrderQuerySchema = z.object({
+  query: z.object({
+    page: z.coerce.number().int().positive().optional(),
+    limit: z.coerce.number().int().positive().max(100).optional(),
   }),
 });
 

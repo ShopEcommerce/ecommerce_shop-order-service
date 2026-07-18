@@ -1,20 +1,27 @@
 import { Message } from 'amqplib';
-import { BaseListener, QueueGroupNames, Subjects } from '@teleshop/common';
+import { BaseListener, DomainEvent, QueueGroupNames, Subjects } from '@teleshop/common';
+import { OrderStatus } from '@prisma/client';
 import { OrderRepository } from '../../modules/order/order.repository';
 import { InboxRepository } from '../../modules/inbox/inbox.repository';
-import { OrderStatus } from '@prisma/client';
 import pino from 'pino';
 
 const logger = pino({ name: 'InventoryReservedListener' });
 
-export class InventoryReservedListener extends BaseListener<any> {
+type InventoryReservedEvent = Extract<DomainEvent, { subject: Subjects.InventoryReserved }>;
+
+export class InventoryReservedListener extends BaseListener<InventoryReservedEvent> {
   readonly subject = Subjects.InventoryReserved;
   queueGroupName = QueueGroupNames.OrderService;
 
-  async onMessage(data: any, _msg: Message) {
-    const eventId = data.eventId;
+  async onMessage(data: InventoryReservedEvent['data'], _msg: Message) {
+    const eventId =
+      data.id || (data as InventoryReservedEvent['data'] & { eventId?: string }).eventId;
     const correlationId = data.correlationId || 'N/A';
-    const orderId = data.orderId;
+    const { orderId } = data;
+
+    if (!eventId || !orderId) {
+      throw new Error('Invalid InventoryReserved payload: missing event identifier or orderId');
+    }
 
     logger.info(
       { correlationId, eventId, orderId },
@@ -22,21 +29,17 @@ export class InventoryReservedListener extends BaseListener<any> {
     );
 
     try {
-      const isProcessed = await InboxRepository.isEventProcessed(eventId);
-      if (isProcessed) {
+      if (await InboxRepository.isEventProcessed(eventId)) {
         logger.info({ correlationId, eventId }, 'Event has already been processed. Skipping.');
         return;
       }
 
       const order = await OrderRepository.findById(orderId);
       if (!order) {
-        logger.error({ correlationId, orderId }, 'Order not found');
         throw new Error('Order not found');
       }
 
-      // State Machine Check: Only update if currently PENDING
       if (order.status === OrderStatus.PENDING) {
-        // Update status + Log history (Using OCC version)
         await OrderRepository.updateOrderStatus(
           order.id,
           order.version,
@@ -53,7 +56,6 @@ export class InventoryReservedListener extends BaseListener<any> {
         );
       }
 
-      // Mark as processed
       await InboxRepository.markAsProcessed(eventId, this.subject);
     } catch (error: any) {
       logger.error(

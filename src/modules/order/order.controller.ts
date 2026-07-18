@@ -3,6 +3,7 @@ import { OrderService } from './order.service';
 import pino from 'pino';
 import { CancelOrderInput, SellerOrderStatusInput, SellerReturnStatusInput } from './order.schema';
 import { OrderStatus, ReturnStatus } from '@prisma/client';
+import { NotFoundError } from '@teleshop/common';
 
 // Cấu hình Logger
 const logger = pino({
@@ -82,8 +83,8 @@ export class OrderController {
     const page = parseInt(req.query.page as string) || 1;
     const limit = parseInt(req.query.limit as string) || 10;
 
-    const orders = await OrderService.getCustomerOrders(userId, page, limit);
-    res.status(200).send({ data: orders, meta: { page, limit } });
+    const result = await OrderService.getCustomerOrders(userId, page, limit);
+    res.status(200).send({ data: result.data, meta: result.meta });
   }
 
   static async getSellerOrders(req: Request, res: Response) {
@@ -132,8 +133,7 @@ export class OrderController {
     const role = req.currentUser!.role;
     const order = await OrderService.getOrderById(req.params.id, sellerId, role);
     if (order.status !== OrderStatus.CANCELLED) {
-      res.status(404).send({ errors: [{ message: 'Cancellation not found' }] });
-      return;
+      throw new NotFoundError('Cancellation not found');
     }
     res.status(200).send({ data: order });
   }

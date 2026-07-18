@@ -1,20 +1,28 @@
 import { Message } from 'amqplib';
-import { BaseListener, QueueGroupNames, Subjects } from '@teleshop/common';
+import { BaseListener, DomainEvent, QueueGroupNames, Subjects } from '@teleshop/common';
+import { OrderStatus } from '@prisma/client';
 import { OrderRepository } from '../../modules/order/order.repository';
 import { InboxRepository } from '../../modules/inbox/inbox.repository';
 import pino from 'pino';
 
 const logger = pino({ name: 'InventoryFailedListener' });
 
-export class InventoryFailedListener extends BaseListener<any> {
+type InventoryFailedEvent = Extract<DomainEvent, { subject: Subjects.InventoryFailed }>;
+
+export class InventoryFailedListener extends BaseListener<InventoryFailedEvent> {
   readonly subject = Subjects.InventoryFailed;
   queueGroupName = QueueGroupNames.OrderService;
 
-  async onMessage(data: any, _msg: Message) {
-    const eventId = data.eventId;
+  async onMessage(data: InventoryFailedEvent['data'], _msg: Message) {
+    const eventId =
+      data.id || (data as InventoryFailedEvent['data'] & { eventId?: string }).eventId;
     const correlationId = data.correlationId || 'N/A';
-    const orderId = data.orderId;
-    const reason = data.reason || 'English: Out of stock';
+    const { orderId } = data;
+    const reason = data.reason || 'Inventory reservation failed';
+
+    if (!eventId || !orderId) {
+      throw new Error('Invalid InventoryFailed payload: missing event identifier or orderId');
+    }
 
     logger.warn(
       { correlationId, eventId, orderId },
@@ -22,8 +30,7 @@ export class InventoryFailedListener extends BaseListener<any> {
     );
 
     try {
-      const isProcessed = await InboxRepository.isEventProcessed(eventId);
-      if (isProcessed) {
+      if (await InboxRepository.isEventProcessed(eventId)) {
         return;
       }
 
@@ -32,11 +39,17 @@ export class InventoryFailedListener extends BaseListener<any> {
         throw new Error('Order not found');
       }
 
+      if (order.status === OrderStatus.CANCELLED) {
+        await InboxRepository.markAsProcessed(eventId, this.subject);
+        return;
+      }
+
       await OrderRepository.cancelOrder(
         order.id,
         order.version,
         `System automatically cancelled: ${reason}`,
         'SYSTEM',
+        correlationId,
       );
 
       logger.info(

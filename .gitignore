@@ -48,3 +48,6 @@ Thumbs.db
 
 # Prisma
 /src/generated/prisma
+
+# Package manager cache
+.npm-cache/
