@@ -6,4 +6,5 @@ module.exports = {
   clearMocks: true,
   moduleFileExtensions: ['js', 'json', 'ts'],
   testMatch: ['**/*.test.ts'],
+  modulePathIgnorePatterns: ['<rootDir>/.npm-cache/'],
 };

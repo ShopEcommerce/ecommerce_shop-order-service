@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import { prisma } from '../../db/prisma';
 
 export class InboxRepository {
@@ -8,9 +9,15 @@ export class InboxRepository {
     return !!event;
   }
 
-  static async markAsProcessed(eventId: string, subject: string) {
-    await prisma.processedEvent.create({
-      data: {
+  static async markAsProcessed(
+    eventId: string,
+    subject: string,
+    tx: Prisma.TransactionClient | typeof prisma = prisma,
+  ) {
+    await tx.processedEvent.upsert({
+      where: { eventId },
+      update: { subject },
+      create: {
         eventId,
         subject,
       },

@@ -5,6 +5,7 @@ import { validateZod } from '../../middlewares/validate.middleware';
 import {
   createOrderSchema,
   cancelOrderSchema,
+  customerOrderQuerySchema,
   returnRequestSchema,
   sellerOrderQuerySchema,
   sellerOrderStatusSchema,
@@ -67,7 +68,11 @@ router.patch(
 
 router.post('/', validateZod(createOrderSchema), asyncHandler(OrderController.createOrder as any));
 
-router.get('/', asyncHandler(OrderController.getCustomerOrders as any));
+router.get(
+  '/',
+  validateZod(customerOrderQuerySchema),
+  asyncHandler(OrderController.getCustomerOrders as any),
+);
 
 router.get('/:id', asyncHandler(OrderController.getOrder as any));
 

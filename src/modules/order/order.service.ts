@@ -1,29 +1,53 @@
-import { OrderRepository } from './order.repository';
-import { BadRequestError, NotFoundError, ForbiddenError } from '@teleshop/common';
-import { OrderStatus, ReturnStatus } from '@prisma/client';
+import crypto from 'crypto';
 import axios from 'axios';
+import { OrderStatus, ReturnStatus } from '@prisma/client';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@teleshop/common';
+import { OrderRepository } from './order.repository';
+
+const CATALOG_SERVICE_URL = process.env.CATALOG_SERVICE_URL || 'http://localhost:3003';
+const PROMOTION_SERVICE_URL = process.env.PROMOTION_SERVICE_URL || 'http://localhost:3008';
+
+const SELLER_ALLOWED_STATUS_TRANSITIONS: Partial<Record<OrderStatus, OrderStatus[]>> = {
+  [OrderStatus.AWAITING_PAYMENT]: [OrderStatus.PROCESSING, OrderStatus.CANCELLED],
+  [OrderStatus.PROCESSING]: [OrderStatus.SHIPPED, OrderStatus.CANCELLED],
+  [OrderStatus.SHIPPED]: [OrderStatus.COMPLETED],
+};
 
 export class OrderService {
   static async createOrder(userId: string, data: any, token?: string, correlationId?: string) {
-    // Get variant IDs from order items
-    const variantIds = data.items.map((i: any) => i.variantId);
+    const variantIds = data.items.map((item: any) => item.variantId);
     const authHeader = token
       ? token.startsWith('Bearer ')
         ? token
         : `Bearer ${token}`
       : undefined;
 
-    // Call Catalog Service to validate prices (This prevents price manipulation from frontend)
-    const catalogResponse = await axios.post('http://localhost:3003/api/product/validate-prices', {
-      variantIds,
-    });
+    let verifiedPrices: Record<string, number>;
+    try {
+      const catalogResponse = await axios.post(
+        `${CATALOG_SERVICE_URL}/api/product/validate-prices`,
+        { variantIds },
+        {
+          headers: {
+            ...(correlationId ? { 'x-correlation-id': correlationId } : {}),
+          },
+        },
+      );
 
-    const verifiedPrices = catalogResponse.data;
+      verifiedPrices = catalogResponse.data;
+    } catch (error: any) {
+      const errorMessage =
+        error.response?.data?.errors?.[0]?.message ||
+        error.response?.data?.message ||
+        'Unable to validate product prices';
+      throw new BadRequestError(errorMessage);
+    }
 
     const validatedItems = data.items.map((item: any) => {
       const actualPrice = verifiedPrices[item.variantId];
-      if (!actualPrice)
+      if (!actualPrice) {
         throw new BadRequestError(`Product ${item.variantId} is no longer available`);
+      }
 
       return {
         ...item,
@@ -40,18 +64,20 @@ export class OrderService {
     let discountAmount = 0;
     const couponCode = data.couponCode;
 
-    // Call Promotion Service to reserve coupon code
     if (couponCode) {
       try {
         const response = await axios.post(
-          'http://localhost:3008/api/promotions/coupons/reserve',
+          `${PROMOTION_SERVICE_URL}/api/promotions/coupons/reserve`,
           {
             code: couponCode,
-            orderId: orderId,
+            orderId,
             orderAmount: subTotal,
           },
           {
-            ...(authHeader ? { headers: { Authorization: authHeader } } : {}),
+            headers: {
+              ...(authHeader ? { Authorization: authHeader } : {}),
+              ...(correlationId ? { 'x-correlation-id': correlationId } : {}),
+            },
           },
         );
 
@@ -97,7 +123,7 @@ export class OrderService {
     const order = await OrderRepository.findById(orderId);
     if (!order) throw new NotFoundError('Order not found');
 
-    if (order.userId !== userId && role !== 'SELLER') {
+    if (order.userId !== userId && role !== 'SELLER' && role !== 'ADMIN') {
       throw new ForbiddenError('You do not have permission to cancel this order');
     }
 
@@ -134,8 +160,8 @@ export class OrderService {
 
     return OrderRepository.createReturnRequest({
       orderId: order.id,
-      userId: userId,
-      reason: reason,
+      userId,
+      reason,
       amount: Number(order.totalAmount),
     });
   }
@@ -208,6 +234,11 @@ export class OrderService {
       order.status === OrderStatus.COMPLETED
     ) {
       throw new BadRequestError(`Cannot update order in state: ${order.status}`);
+    }
+
+    const allowedTransitions = SELLER_ALLOWED_STATUS_TRANSITIONS[order.status] || [];
+    if (!allowedTransitions.includes(nextStatus)) {
+      throw new BadRequestError(`Invalid status transition from ${order.status} to ${nextStatus}`);
     }
 
     if (nextStatus === OrderStatus.CANCELLED) {

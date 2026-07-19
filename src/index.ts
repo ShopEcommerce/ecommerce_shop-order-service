@@ -4,6 +4,7 @@ import { rabbitmqWrapper } from '@teleshop/common';
 import pino from 'pino';
 import { InventoryReservedListener } from './events/listeners/inventory-reserved-listener';
 import { InventoryFailedListener } from './events/listeners/inventory-failed-listener';
+import { PaymentCompletedListener } from './events/listeners/payment-completed-listener';
 import { startOutboxWorker } from './workers/outbox.worker';
 
 const logger = pino();
@@ -30,6 +31,7 @@ const start = async () => {
 
     new InventoryReservedListener(rabbitmqWrapper.channel).listen();
     new InventoryFailedListener(rabbitmqWrapper.channel).listen();
+    new PaymentCompletedListener(rabbitmqWrapper.channel).listen();
 
     const port = process.env.PORT || 3002;
     app.listen(port, () => {
