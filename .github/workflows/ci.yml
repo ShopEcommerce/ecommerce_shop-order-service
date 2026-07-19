@@ -9,12 +9,27 @@ on:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: order_db
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d order_db"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/order_db?schema=public
+      JWT_SECRET: test-secret-key-for-ci
 
     steps:
-      - name: Checkout order-service
+      - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          path: order-service
 
       - name: Checkout shared repo
         uses: actions/checkout@v4
@@ -23,36 +38,31 @@ jobs:
           path: shared
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '22.x'
-          cache: 'npm'
-          cache-dependency-path: 'order-service/package-lock.json'
+          package-manager-cache: false
 
       - name: Build Shared Library
         run: |
           cd shared
-          npm install
+          npm install --cache .npm-cache
           npm run build
-          npm pack
+          npm pack --cache .npm-cache
 
       - name: Install Dependencies
         run: |
-          cd order-service
-          npm install ../shared/teleshop-common-1.0.4.tgz
-          npm install
+          npm install ./shared/teleshop-common-1.0.4.tgz --cache .npm-cache
+          npm install --cache .npm-cache
 
       - name: Generate Prisma Client
         run: |
-          cd order-service
           npx prisma generate
 
       - name: Run Linter
         run: |
-          cd order-service
           npm run lint
 
-      - name: Run Unit Tests
+      - name: Run Tests
         run: |
-          cd order-service
           npm run test:ci
